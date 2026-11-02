@@ -152,6 +152,7 @@ Matching: each decision is keyed by kind, file, enclosing function and message t
 ## Limits
 
 - **Compile-time decisions, not measurements.** "Escapes to heap" means the compiler can't keep the value on the stack. Some of these don't allocate at run time, such as a constant string converted to an interface, and a new escape on a cold path costs nothing in practice. Measure with `go test -bench . -benchmem` and `benchstat` before acting.
+- **A build that failed partway.** `compare` refuses a log with no diagnostics at all, but one package failing among several still leaves a log it can read, and that package's changes will look like improvements. Check the build's exit code first. `git` mode stops on any failed build.
 - **Same compiler on both sides.** Cost numbers and decisions change between Go versions. `git` mode uses one toolchain for both builds. For `compare`, make both logs with the same version.
 - **Only packages you build.** `-gcflags=-m=2` applies to the packages on the command line. Test files aren't compiled by `go build`, so test-only code isn't covered.
 - **Line-based function attribution.** A diagnostic belongs to the last function declared above it. Code in a package-level variable initializer is attributed to the function above it. Closures count as part of their enclosing function.

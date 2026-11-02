@@ -278,6 +278,16 @@ func TestRunExitCodes(t *testing.T) {
 	}
 	empty := filepath.Join(t.TempDir(), "empty.log")
 	os.WriteFile(empty, []byte("ok  \texample.com/p\n"), 0o644)
+	// A failed build must never read as every escape having gone away.
+	dir := t.TempDir()
+	real, failed := filepath.Join(dir, "real.log"), filepath.Join(dir, "failed.log")
+	os.WriteFile(real, []byte("./a.go:3:9: x escapes to heap\n./a.go:5:9: moved to heap: y\n"), 0o644)
+	os.WriteFile(failed, []byte("# example.com/x\n./main.go:3:9: syntax error: unexpected {\n"), 0o644)
+	for _, pair := range [][]string{{real, failed}, {failed, real}, {real, empty}, {empty, real}} {
+		if code, out, errs := runCmd("compare", "--fail", pair[0], pair[1]); code != 2 || !strings.Contains(errs, "failed build") {
+			t.Errorf("%v: %d %s %s", pair, code, out, errs)
+		}
+	}
 	if code, _, errs := runCmd("compare", empty, empty); code != 2 || !strings.Contains(errs, "-gcflags=-m=2") {
 		t.Errorf("empty logs: %d %s", code, errs)
 	}

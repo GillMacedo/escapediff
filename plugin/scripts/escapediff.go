@@ -787,8 +787,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "escapediff: %v\n", err)
 		return 2
 	}
-	if base.Packages == 0 && len(base.Diags) == 0 && len(base.Funcs) == 0 &&
-		headB.Packages == 0 && len(headB.Diags) == 0 && len(headB.Funcs) == 0 {
+	blank := func(b *Build) bool { return len(b.Diags) == 0 && len(b.Funcs) == 0 }
+	// A saved log with nothing in it is usually a failed build, and comparing with it
+	// would report every escape as an improvement. In git mode the build itself succeeded.
+	if args[0] == "compare" && (blank(base) || blank(headB)) {
+		fmt.Fprintln(stderr, "escapediff: a log has no compiler diagnostics, so it may be from a failed build. Check that build, then save stderr from go build -gcflags=-m=2.")
+		return 2
+	}
+	if blank(base) && blank(headB) && base.Packages == 0 && headB.Packages == 0 {
 		fmt.Fprintln(stderr, "escapediff: neither log has compiler diagnostics. Build with -gcflags=-m=2 and save stderr.")
 		return 2
 	}
