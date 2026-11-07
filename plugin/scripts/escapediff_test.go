@@ -78,6 +78,9 @@ p/p.go:21:3: devirtualizing i.M to T
 	if d := b.Diags[1].Detail; d != "" {
 		t.Errorf("moved to heap should keep its own text, got detail %q", d)
 	}
+	if why := strings.Join(b.Diags[1].Why, "\n"); !strings.Contains(why, "flow: ~r0 = &x:") {
+		t.Errorf("moved to heap should get its flow lines, got %q", b.Diags[1].Why)
+	}
 	big := b.Funcs["p|Big"]
 	if big == nil || big.Inlinable || big.Cost != 95 || !strings.Contains(big.Reason, "exceeds budget") {
 		t.Errorf("Big = %+v", big)
@@ -91,6 +94,88 @@ p/p.go:21:3: devirtualizing i.M to T
 	}
 	if b.HeapCount() != 2 || b.InlinableCount() != 3 {
 		t.Errorf("heap=%d inlinable=%d", b.HeapCount(), b.InlinableCount())
+	}
+}
+
+func TestParseWhySeparatesEscapesAtOnePosition(t *testing.T) {
+	log := `# example.com/p
+p/p.go:1:1: first escapes to heap in F:
+p/p.go:1:1:   flow: {heap} ← &first:
+p/p.go:1:1:     from first (spill) at p/p.go:1:1
+p/p.go:1:1: append(a, b...) escapes to heap in F:
+p/p.go:1:1:   flow: slices.s ← &{storage for append(a, b...)}:
+p/p.go:1:1:     from append(a, b...) (spill) at p/p.go:1:1
+p/p.go:1:1: append(c, d...) escapes to heap in F:
+p/p.go:1:1:   flow: slices.s ← &{storage for append(c, d...)}:
+p/p.go:1:1:     from append(c, d...) (spill) at p/p.go:1:1
+p/p.go:1:1: first escapes to heap
+p/p.go:1:1: append escapes to heap
+p/p.go:1:1: append escapes to heap
+`
+	b, err := Parse(strings.NewReader(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Diags) != 3 {
+		t.Fatalf("got %d diagnostics: %v", len(b.Diags), texts(b.Diags))
+	}
+	checks := []struct {
+		contains string
+		misses   string
+	}{
+		{"flow: {heap} ← &first:", "append("},
+		{"storage for append(a, b...)", "first"},
+		{"storage for append(c, d...)", "first"},
+	}
+	for i, c := range checks {
+		why := strings.Join(b.Diags[i].Why, "\n")
+		if !strings.Contains(why, c.contains) {
+			t.Errorf("diag %d %q misses %q", i, why, c.contains)
+		}
+		if strings.Contains(why, c.misses) {
+			t.Errorf("diag %d %q also has %q", i, why, c.misses)
+		}
+	}
+}
+
+func TestParseWhyLines(t *testing.T) {
+	b := mustParse(t, "shop-after.log")
+	var found bool
+	for _, d := range b.Diags {
+		if d.File != "orders/orders.go" || d.Line != 75 || d.Col != 23 ||
+			!strings.HasSuffix(d.Text, " escapes to heap") {
+			continue
+		}
+		found = true
+		if len(d.Why) == 0 {
+			t.Fatal("escape has no flow lines")
+		}
+		why := strings.Join(d.Why, "\n")
+		if !strings.Contains(why, "flow: ~r0 ← &{storage for &errors.errorString{...}}") {
+			t.Errorf("why = %q", d.Why)
+		}
+		if !strings.Contains(why, "from &errors.errorString{...} (spill)") {
+			t.Errorf("why = %q", d.Why)
+		}
+	}
+	if !found {
+		t.Fatal("no escape at orders/orders.go:75:23")
+	}
+}
+
+func TestWriteTextWhy(t *testing.T) {
+	r := compareLogs(t, "shop-before.log", "shop-after.log", false)
+
+	var buf bytes.Buffer
+	WriteText(&buf, r, true)
+	if out := buf.String(); !strings.Contains(out, "flow: ~r0 ← &{storage for &errors.errorString{...}}") {
+		t.Errorf("--why output misses the flow line:\n%s", out)
+	}
+
+	buf.Reset()
+	WriteText(&buf, r, false)
+	if out := buf.String(); strings.Contains(out, "flow:") {
+		t.Errorf("without --why, flow lines were printed:\n%s", out)
 	}
 }
 
@@ -159,7 +244,7 @@ func TestShopChange(t *testing.T) {
 func TestCommentsOnlyChangeIsQuiet(t *testing.T) {
 	r := compareLogs(t, "shop-before.log", "shop-comments.log", false)
 	var buf bytes.Buffer
-	WriteText(&buf, r)
+	WriteText(&buf, r, false)
 	want := "No changes in heap escapes, parameter leaks, inlining or devirtualization (2 heap escapes, 8 inlinable functions).\n"
 	if buf.String() != want {
 		t.Fatalf("got %q", buf.String())
@@ -293,6 +378,27 @@ func TestRealChiOutsideHidden(t *testing.T) {
 		if d.File != "tree.go" {
 			t.Errorf("outside file listed: %s", d.File)
 		}
+		if d.Line != 840 || d.Col != 23 {
+			continue
+		}
+		why := strings.Join(d.Why, "\n")
+		if !strings.Contains(why, "flow:") {
+			t.Errorf("%q has no flow lines", d.Text)
+		}
+		text := d.Text
+		if d.Detail != "" {
+			text = d.Detail
+		}
+		// Escapes that share this position must keep their own flows.
+		if strings.Contains(text, "slices.s[:cap") && !strings.Contains(why, "slices.s[:cap") {
+			t.Errorf("append got another escape's flow:\n%s", why)
+		}
+		if strings.Contains(text, "slices.newslice") && strings.Contains(why, "slices.s[:cap") {
+			t.Errorf("append got the other append's flow:\n%s", why)
+		}
+		if strings.Contains(text, `"len out of range"`) && !strings.Contains(why, `"len out of range"`) {
+			t.Errorf("string escape got another escape's flow:\n%s", why)
+		}
 	}
 	all := compareLogs(t, "real/chi-be60b2e-base.log", "real/chi-be60b2e-head.log", true)
 	if all.Outside != 0 || len(all.NewHeap) != 13 {
@@ -333,6 +439,15 @@ func TestRunExitCodes(t *testing.T) {
 	}
 	if code, out, _ := runCmd("compare", "--json", before, after); code != 0 || !strings.Contains(out, `"noLongerInlined"`) {
 		t.Errorf("--json: %d %s", code, out)
+	}
+	if code, out, _ := runCmd("compare", "--why", before, after); code != 0 || !strings.Contains(out, "flow:") {
+		t.Errorf("--why: %d %s", code, out)
+	}
+	if code, _, errs := runCmd("compare", "--why", "--json", before, after); code != 2 || !strings.Contains(errs, "--why") {
+		t.Errorf("--why with --json: %d %q", code, errs)
+	}
+	if code, _, errs := runCmd("compare", "--why", "--markdown", before, after); code != 2 || !strings.Contains(errs, "--why") {
+		t.Errorf("--why with --markdown: %d %q", code, errs)
 	}
 	if code, _, _ := runCmd("compare", before); code != 2 {
 		t.Errorf("missing arg: %d", code)

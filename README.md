@@ -119,12 +119,13 @@ When a change starts using a generic function from another package, such as `sli
 
 ## Usage
 
-    escapediff git [--head REF] [--save DIR] [--json|--markdown] [--fail] [--all] BASE [PACKAGES...]
-    escapediff compare [--json|--markdown] [--fail] [--all] BASE.log HEAD.log
+    escapediff git [--head REF] [--save DIR] [--why] [--json|--markdown] [--fail] [--all] BASE [PACKAGES...]
+    escapediff compare [--why] [--json|--markdown] [--fail] [--all] BASE.log HEAD.log
 
 - `git` builds `BASE` and your working tree, uncommitted edits included, with `go build -gcflags=-m=2 -o /dev/null`, then compares them. `--head REF` builds a commit instead of the working tree. Revisions are unpacked with `git archive` into a temporary directory, so your checkout isn't touched. `PACKAGES` defaults to `./...`. Run it from inside the module.
 - `compare` reads two saved outputs of `go build -gcflags=-m=2 ./... 2> FILE`. Both should come from the same Go version. `-m=1` output works too, but then changes are matched by file only, function names aren't shown, and a function missing from head's log can't be told apart from one that was removed.
 - `--save DIR` writes `base.log` and `head.log`, which hold the compiler's full reasoning (`flow:` lines) for each escape.
+- `--why` prints those `flow:` lines under each new heap escape or move in the text report. It needs `-m=2` logs, and it can't be combined with `--json` or `--markdown`.
 - `--fail` exits 1 when there are new heap escapes, new parameter leaks, functions no longer inlined, or calls no longer devirtualized. "Close to the budget" doesn't fail. Exit code 2 means bad usage, a failed build, or a file it couldn't read.
 - `--json` prints the full result.
 - `--markdown` prints one Markdown table per section, so CI can post the report as a pull request comment. It can't be combined with `--json`.
@@ -165,7 +166,7 @@ Matching: each decision is keyed by kind, file, enclosing function and message t
 
 **How do I check if my Go change adds heap allocations?** Run `escapediff git main` from your module. It lists escapes that are new compared with `main`. Then benchmark with `-benchmem` to see whether they matter at run time.
 
-**How do I see why a variable escapes to the heap?** Run with `--save DIR` and find the same `file:line:col` in `DIR/head.log`. The indented `flow:` lines under it are the compiler's explanation.
+**How do I see why a variable escapes to the heap?** Run with `--why` to print the compiler's indented `flow:` lines under each new heap escape. For any escape, run with `--save DIR` and find the same `file:line:col` in `DIR/head.log`.
 
 **How do I know if a Go function is still inlined?** "No longer inlined" lists functions that were inlinable in base and aren't in head, with the reason, such as `function too complex: cost 116 exceeds budget 80`.
 
