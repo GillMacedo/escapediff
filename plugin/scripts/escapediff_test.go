@@ -192,13 +192,49 @@ func TestMarkdownShopChange(t *testing.T) {
 	}
 }
 
+func TestMarkdownByFileDropsInColumn(t *testing.T) {
+	r := compareLogs(t, "shop-before-m1.log", "shop-after.log", false)
+	if !r.ByFile {
+		t.Fatal("expected file matching")
+	}
+	var buf bytes.Buffer
+	WriteMarkdown(&buf, r)
+	out := buf.String()
+
+	if !strings.Contains(out, "| Position | Change |\n| --- | --- |\n") {
+		t.Errorf("missing two-column table in:\n%s", out)
+	}
+	if strings.Contains(out, "| In |") {
+		t.Errorf("In column should be dropped when matching by file:\n%s", out)
+	}
+}
+
+func TestMarkdownEmptyReason(t *testing.T) {
+	r := &Result{LostInline: []LostInline{{FuncInfo: FuncInfo{File: "x.go", Line: 1, Name: "F"}}}}
+	var buf bytes.Buffer
+	WriteMarkdown(&buf, r)
+
+	if want := "| `x.go:1` | `F` | — | — |"; !strings.Contains(buf.String(), want) {
+		t.Errorf("missing %q in:\n%s", want, buf.String())
+	}
+}
+
 func TestMarkdownQuietChange(t *testing.T) {
 	r := compareLogs(t, "shop-before.log", "shop-comments.log", false)
 	var buf bytes.Buffer
 	WriteMarkdown(&buf, r)
-	want := "No changes in heap escapes, parameter leaks, inlining or devirtualization (2 heap escapes, 8 inlinable functions).\n\n"
+	want := "No changes in heap escapes, parameter leaks, inlining or devirtualization (2 heap escapes, 8 inlinable functions).\n"
 	if buf.String() != want {
 		t.Fatalf("got %q", buf.String())
+	}
+
+	r = &Result{HeadHeap: 2, HeadInlinable: 8, Outside: 3}
+	buf.Reset()
+	WriteMarkdown(&buf, r)
+	want = "No changes in heap escapes, parameter leaks, inlining or devirtualization (2 heap escapes, 8 inlinable functions).\n" +
+		"\nNot listed: 3 changes in files outside these packages, such as generic code from the standard library. Use --all to list them.\n"
+	if buf.String() != want {
+		t.Fatalf("outside: got %q", buf.String())
 	}
 }
 
@@ -214,6 +250,24 @@ func TestMarkdownEscaping(t *testing.T) {
 	}
 	if got, want := mdCode("`x`"), "`` `x` ``"; got != want {
 		t.Errorf("mdCode edge backticks = %q, want %q", got, want)
+	}
+	if got, want := mdCode(""), "—"; got != want {
+		t.Errorf("mdCode empty = %q, want %q", got, want)
+	}
+	if got, want := mdCode(" "), "` `"; got != want {
+		t.Errorf("mdCode one space = %q, want %q", got, want)
+	}
+	if got, want := mdCode("   "), "`   `"; got != want {
+		t.Errorf("mdCode spaces = %q, want %q", got, want)
+	}
+	if got, want := mdCode(" x"), "`  x `"; got != want {
+		t.Errorf("mdCode leading space = %q, want %q", got, want)
+	}
+	if got, want := mdCode("x "), "` x  `"; got != want {
+		t.Errorf("mdCode trailing space = %q, want %q", got, want)
+	}
+	if got, want := mdCode(" x "), "`  x  `"; got != want {
+		t.Errorf("mdCode edge spaces = %q, want %q", got, want)
 	}
 }
 
