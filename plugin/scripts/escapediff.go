@@ -620,6 +620,15 @@ func summaryParts(r *Result) ([]string, int) {
 	return parts, improved
 }
 
+// lostInlineReason returns the reason a function is no longer inlined, using
+// the same wording in both report formats.
+func lostInlineReason(f LostInline) string {
+	if f.Removed {
+		return "not in head's log (removed, renamed or not inlinable)"
+	}
+	return f.Reason
+}
+
 // WriteText prints the result for people.
 func WriteText(w io.Writer, r *Result) {
 	if r.ByFile {
@@ -648,15 +657,11 @@ func WriteText(w io.Writer, r *Result) {
 	if len(r.LostInline) > 0 {
 		fmt.Fprintln(w, "\nNo longer inlined:")
 		for _, f := range r.LostInline {
-			why := f.Reason
-			if f.Removed {
-				why = "not in head's log (removed, renamed or not inlinable)"
-			}
 			was := ""
 			if f.BaseCost > 0 {
 				was = fmt.Sprintf(" (base cost %d)", f.BaseCost)
 			}
-			fmt.Fprintf(w, "  %s  %s: %s%s\n", pos(f.File, f.Line, 0), f.Name, why, was)
+			fmt.Fprintf(w, "  %s  %s: %s%s\n", pos(f.File, f.Line, 0), f.Name, lostInlineReason(f), was)
 			if f.CallSites > 0 {
 				fmt.Fprintf(w, "      %s inlined in base\n", plural(f.CallSites, "call site was", "call sites were"))
 			}
@@ -703,43 +708,61 @@ func WriteText(w io.Writer, r *Result) {
 	}
 }
 
+var mdCellReplacer = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	"|", `\|`,
+	"\n", "<br>",
+	"\r", "",
+)
+
 // mdCell escapes text for a Markdown table cell.
 func mdCell(s string) string {
-	return strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		"|", `\|`,
-		"\n", "<br>",
-		"\r", "",
-	).Replace(s)
+	return mdCellReplacer.Replace(s)
 }
 
 // mdCode formats s as an inline code span that survives a Markdown table,
 // choosing a delimiter longer than any backtick run in s.
 func mdCode(s string) string {
+	if s == "" {
+		return "—"
+	}
 	s = strings.ReplaceAll(s, "|", `\|`)
 	delim := "`"
 	for strings.Contains(s, delim) {
 		delim += "`"
 	}
-	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+	// CommonMark strips one space from each side when the content begins and
+	// ends with a space, so padding protects leading and trailing spaces as
+	// well as backticks at the edges.
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") ||
+		strings.HasPrefix(s, " ") || strings.HasSuffix(s, " ") {
 		return delim + " " + s + " " + delim
 	}
 	return delim + s + delim
 }
 
-func writeDiagTable(w io.Writer, ds []Diag) {
-	fmt.Fprintln(w, "| Position | Change | In |")
-	fmt.Fprintln(w, "| --- | --- | --- |")
+func writeDiagTable(w io.Writer, ds []Diag, byFile bool) {
+	if byFile {
+		fmt.Fprintln(w, "| Position | Change |")
+		fmt.Fprintln(w, "| --- | --- |")
+	} else {
+		fmt.Fprintln(w, "| Position | Change | In |")
+		fmt.Fprintln(w, "| --- | --- | --- |")
+	}
 	for _, d := range ds {
-		fn := "—"
-		if d.Func != "" {
-			fn = mdCode(d.Func)
-		}
 		text := d.Text
 		if d.Detail != "" {
 			text = d.Detail
+		}
+		if byFile {
+			fmt.Fprintf(w, "| %s | %s |\n", mdCode(pos(d.File, d.Line, d.Col)), mdCode(text))
+			continue
+		}
+		fn := "—"
+		if d.Func != "" {
+			fn = mdCode(d.Func)
 		}
 		fmt.Fprintf(w, "| %s | %s | %s |\n", mdCode(pos(d.File, d.Line, d.Col)), mdCode(text), fn)
 	}
@@ -755,9 +778,12 @@ func WriteMarkdown(w io.Writer, r *Result) {
 
 	parts, improved := summaryParts(r)
 	if len(parts) == 0 && improved == 0 && len(r.NearBudget) == 0 {
-		fmt.Fprintf(w, "No changes in heap escapes, parameter leaks, inlining or devirtualization (%s, %s).\n\n",
+		fmt.Fprintf(w, "No changes in heap escapes, parameter leaks, inlining or devirtualization (%s, %s).\n",
 			plural(r.HeadHeap, "heap escape", "heap escapes"), plural(r.HeadInlinable, "inlinable function", "inlinable functions"))
-		writeOutside(w, r)
+		if r.Outside > 0 {
+			fmt.Fprintln(w)
+			writeOutside(w, r)
+		}
 		return
 	}
 	if len(parts) == 0 {
@@ -771,27 +797,19 @@ func WriteMarkdown(w io.Writer, r *Result) {
 
 	if len(r.NewHeap) > 0 {
 		fmt.Fprint(w, "\n### New heap escapes\n\n")
-		writeDiagTable(w, r.NewHeap)
+		writeDiagTable(w, r.NewHeap, r.ByFile)
 	}
 	if len(r.LostInline) > 0 {
 		fmt.Fprint(w, "\n### No longer inlined\n\n")
 		fmt.Fprintln(w, "| Position | Function | Reason | Detail |")
 		fmt.Fprintln(w, "| --- | --- | --- | --- |")
 		for _, f := range r.LostInline {
-			why := f.Reason
-			if f.Removed {
-				why = "not in head's log (removed, renamed or not inlinable)"
-			}
 			var detail []string
 			if f.BaseCost > 0 {
 				detail = append(detail, fmt.Sprintf("base cost %d", f.BaseCost))
 			}
 			if f.CallSites > 0 {
-				was := "call sites were"
-				if f.CallSites == 1 {
-					was = "call site was"
-				}
-				detail = append(detail, fmt.Sprintf("%d %s inlined in base", f.CallSites, was))
+				detail = append(detail, fmt.Sprintf("%s inlined in base", plural(f.CallSites, "call site was", "call sites were")))
 			}
 			for _, c := range f.Grown {
 				detail = append(detail, fmt.Sprintf("inlines %s, whose cost grew %d -> %d", mdCode(c.Name), c.BaseCost, c.Cost))
@@ -799,16 +817,16 @@ func WriteMarkdown(w io.Writer, r *Result) {
 			if len(detail) == 0 {
 				detail = append(detail, "—")
 			}
-			fmt.Fprintf(w, "| %s | %s | %s | %s |\n", mdCode(pos(f.File, f.Line, 0)), mdCode(f.Name), mdCode(why), strings.Join(detail, "<br>"))
+			fmt.Fprintf(w, "| %s | %s | %s | %s |\n", mdCode(pos(f.File, f.Line, 0)), mdCode(f.Name), mdCode(lostInlineReason(f)), strings.Join(detail, "<br>"))
 		}
 	}
 	if len(r.NewLeaks) > 0 {
 		fmt.Fprint(w, "\n### New parameter leaks (callers may now allocate)\n\n")
-		writeDiagTable(w, r.NewLeaks)
+		writeDiagTable(w, r.NewLeaks, r.ByFile)
 	}
 	if len(r.LostDevirt) > 0 {
 		fmt.Fprint(w, "\n### No longer devirtualized (base positions)\n\n")
-		writeDiagTable(w, r.LostDevirt)
+		writeDiagTable(w, r.LostDevirt, r.ByFile)
 	}
 	if len(r.NearBudget) > 0 {
 		fmt.Fprintf(w, "\n### Still inlined, but close to the budget of %d\n\n", r.NearBudget[0].Budget)
@@ -820,11 +838,11 @@ func WriteMarkdown(w io.Writer, r *Result) {
 	}
 	if len(r.GoneHeap) > 0 {
 		fmt.Fprint(w, "\n### Heap escapes gone (base positions)\n\n")
-		writeDiagTable(w, r.GoneHeap)
+		writeDiagTable(w, r.GoneHeap, r.ByFile)
 	}
 	if len(r.GoneLeaks) > 0 {
 		fmt.Fprint(w, "\n### Parameter leaks gone (base positions)\n\n")
-		writeDiagTable(w, r.GoneLeaks)
+		writeDiagTable(w, r.GoneLeaks, r.ByFile)
 	}
 	if r.Outside > 0 {
 		fmt.Fprintln(w)
