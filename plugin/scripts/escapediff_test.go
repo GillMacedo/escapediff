@@ -227,6 +227,15 @@ func TestMarkdownQuietChange(t *testing.T) {
 	if buf.String() != want {
 		t.Fatalf("got %q", buf.String())
 	}
+
+	r = &Result{HeadHeap: 2, HeadInlinable: 8, Outside: 3}
+	buf.Reset()
+	WriteMarkdown(&buf, r)
+	want = "No changes in heap escapes, parameter leaks, inlining or devirtualization (2 heap escapes, 8 inlinable functions).\n" +
+		"\nNot listed: 3 changes in files outside these packages, such as generic code from the standard library. Use --all to list them.\n"
+	if buf.String() != want {
+		t.Fatalf("outside: got %q", buf.String())
+	}
 }
 
 func TestMarkdownEscaping(t *testing.T) {
@@ -244,6 +253,12 @@ func TestMarkdownEscaping(t *testing.T) {
 	}
 	if got, want := mdCode(""), "—"; got != want {
 		t.Errorf("mdCode empty = %q, want %q", got, want)
+	}
+	if got, want := mdCode(" "), "` `"; got != want {
+		t.Errorf("mdCode one space = %q, want %q", got, want)
+	}
+	if got, want := mdCode("   "), "`   `"; got != want {
+		t.Errorf("mdCode spaces = %q, want %q", got, want)
 	}
 	if got, want := mdCode(" x"), "`  x `"; got != want {
 		t.Errorf("mdCode leading space = %q, want %q", got, want)

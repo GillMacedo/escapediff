@@ -573,6 +573,11 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
+// callSitesInlined describes the call sites a function was inlined into in base.
+func callSitesInlined(n int) string {
+	return plural(n, "call site was", "call sites were") + " inlined in base"
+}
+
 func pos(file string, line, col int) string {
 	if col > 0 {
 		return fmt.Sprintf("%s:%d:%d", file, line, col)
@@ -663,7 +668,7 @@ func WriteText(w io.Writer, r *Result) {
 			}
 			fmt.Fprintf(w, "  %s  %s: %s%s\n", pos(f.File, f.Line, 0), f.Name, lostInlineReason(f), was)
 			if f.CallSites > 0 {
-				fmt.Fprintf(w, "      %s inlined in base\n", plural(f.CallSites, "call site was", "call sites were"))
+				fmt.Fprintf(w, "      %s\n", callSitesInlined(f.CallSites))
 			}
 			for _, c := range f.Grown {
 				fmt.Fprintf(w, "      inlines %s, whose cost grew %d -> %d\n", c.Name, c.BaseCost, c.Cost)
@@ -735,9 +740,11 @@ func mdCode(s string) string {
 	}
 	// CommonMark strips one space from each side when the content begins and
 	// ends with a space, so padding protects leading and trailing spaces as
-	// well as backticks at the edges.
-	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") ||
-		strings.HasPrefix(s, " ") || strings.HasSuffix(s, " ") {
+	// well as backticks at the edges. All-space content is exempt from that
+	// rule, and padding it would add two extra spaces.
+	if strings.Trim(s, " ") != "" &&
+		(strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") ||
+			strings.HasPrefix(s, " ") || strings.HasSuffix(s, " ")) {
 		return delim + " " + s + " " + delim
 	}
 	return delim + s + delim
@@ -809,7 +816,7 @@ func WriteMarkdown(w io.Writer, r *Result) {
 				detail = append(detail, fmt.Sprintf("base cost %d", f.BaseCost))
 			}
 			if f.CallSites > 0 {
-				detail = append(detail, fmt.Sprintf("%s inlined in base", plural(f.CallSites, "call site was", "call sites were")))
+				detail = append(detail, callSitesInlined(f.CallSites))
 			}
 			for _, c := range f.Grown {
 				detail = append(detail, fmt.Sprintf("inlines %s, whose cost grew %d -> %d", mdCode(c.Name), c.BaseCost, c.Cost))
