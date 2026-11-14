@@ -1,6 +1,6 @@
 {
   "name": "escapediff",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Compare Go escape analysis and inlining between a base branch and your change: new heap escapes, functions no longer inlined, new parameter leaks and lost devirtualization.",
   "author": {
     "name": "Giulliano Macedo",

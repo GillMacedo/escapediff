@@ -4,6 +4,11 @@ All notable changes are documented here, in [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-14
+
+### Fixed
+- Polish markdown output (#10)
+
 ## [0.3.0] - 2026-11-08
 
 ### Added
